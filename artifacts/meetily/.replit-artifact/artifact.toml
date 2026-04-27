@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Meetily — AI Meeting Assistant"
+version = "1.0.0"
+id = "artifacts/meetily"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18259
+
+[services.development]
+run = "pnpm --filter @workspace/meetily run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/meetily", "run", "build" ]
+publicDir = "artifacts/meetily/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18259"
+BASE_PATH = "/"

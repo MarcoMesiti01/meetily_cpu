@@ -1,0 +1,426 @@
+Here’s a **comprehensive end-to-end plan** to integrate `faster-whisper-server` into Meetily for **fully local use on laptops with strong CPUs and no GPUs**.
+
+## 1. Target architecture
+Recommended final architecture:
+- **Meetily desktop app** remains the main user-facing app.
+- **Meetily backend** remains the orchestration/API layer for:
+  - settings
+  - meeting storage
+  - transcript persistence
+  - summary generation
+  - provider health/status
+- **faster-whisper-server** becomes the **preferred CPU transcription engine** for local deployments.
+- Everything runs **locally on the laptop**:
+  - no cloud dependency for transcription
+  - CPU-only inference using `int8`
+  - local model cache
+  - local database and recordings
+
+### Recommended runtime topology
+- Tauri / frontend app
+- Meetily backend on localhost
+- faster-whisper-server on localhost
+- Ollama or existing local summary engine on localhost if summaries are also local
+
+That gives a clean separation:
+- frontend = UX
+- Meetily backend = business logic / storage / integration layer
+- faster-whisper-server = speech-to-text engine
+
+---
+
+## 2. Integration strategy
+### Recommended product direction
+For **CPU-first laptops**, I recommend:
+- make `fasterWhisperServer` the **default recommended transcription provider** for local CPU deployments
+- keep existing providers (`localWhisper`, `parakeet`, others) for compatibility/fallback
+- avoid removing current providers immediately
+
+This reduces migration risk while allowing the product to move toward a more maintainable CPU-oriented transcription stack.
+
+---
+
+## 3. Backend plan
+## 3.1 Configuration layer
+Extend Meetily backend transcription config to support:
+- `provider = fasterWhisperServer`
+- `model`
+- `fasterWhisperServerUrl`
+- optional future fields:
+  - `language`
+  - `computeType`
+  - `beamSize`
+  - `wordTimestamps`
+
+### CPU defaults
+Recommended defaults for laptops without GPUs:
+- model: `base` or `small` initially
+- device: `cpu`
+- compute type: `int8`
+- language: `auto` or user-selected
+
+### Why not `large-v3` by default?
+`large-v3` on CPU can be too slow for live use on many laptops. Better defaults:
+- **`base`** = safest for responsiveness
+- **`small`** = better accuracy if CPU headroom is sufficient
+- **`medium`** = optional advanced setting
+
+---
+
+## 3.2 Transcription provider abstraction
+Create or finalize a provider abstraction in Meetily backend:
+- `localWhisper`
+- `parakeet`
+- `fasterWhisperServer`
+- optional future providers
+
+Responsibilities of the abstraction:
+- health check
+- transcription request execution
+- response normalization
+- error mapping
+- metadata mapping into Meetily transcript structures
+
+### Response normalization
+Convert `faster-whisper-server` output into Meetily-compatible transcript segments:
+- text
+- start/end timestamps
+- duration
+- segment ids
+- language
+- model
+
+This is important because the frontend should consume **Meetily’s normalized model**, not provider-specific payloads.
+
+---
+
+## 3.3 Backend endpoints
+Expose a stable backend API for the frontend.
+
+### Required endpoints
+1. **GET** provider health
+   - `GET /transcription-providers/faster-whisper-server/health`
+2. **POST** audio transcription
+   - `POST /transcribe-audio`
+3. **GET/POST** transcript config
+   - load/save provider + URL + model
+4. Optional later:
+   - model capability endpoint
+   - provider diagnostics endpoint
+   - benchmark endpoint
+
+### Important design rule
+The frontend should talk to **Meetily backend**, not directly to `faster-whisper-server`, except maybe for diagnostics. That keeps the architecture stable and installer-friendly.
+
+---
+
+## 3.4 CPU-performance backend rules
+Because the deployment target is CPU laptops:
+- use **serialized or bounded concurrency** for transcription requests
+- avoid launching multiple heavy CPU transcription jobs in parallel by default
+- keep timeouts generous but controlled
+- cache model load once and reuse process
+- expose a “busy / currently transcribing” state if needed
+
+### Practical defaults
+- one faster-whisper-server process per machine
+- one active live transcription job at a time
+- imported file transcription may queue behind live job
+
+---
+
+## 3.5 Persistence and meeting integration
+Backend should persist:
+- transcript text
+- transcript segments
+- transcription provider used
+- model used
+- language detected/requested
+- timestamps
+- processing duration
+
+This helps debugging and later export/audit behavior.
+
+---
+
+## 4. Frontend plan
+## 4.1 Settings UX
+In transcript settings, add:
+- provider option: `fasterWhisperServer`
+- server URL field
+- model selector for CPU-friendly models
+- optional language selector
+- optional advanced settings section:
+  - beam size
+  - word timestamps
+  - compute type display (fixed to `int8` for CPU builds)
+
+### UX recommendation
+Show this provider as:
+- **“Local Faster Whisper (CPU Recommended)”**
+instead of the raw internal label.
+
+---
+
+## 4.2 Health-check UX
+Add a small status panel in settings:
+- backend reachable
+- faster-whisper-server reachable
+- model loaded
+- active model
+- last error if unhealthy
+
+This should help users troubleshoot without opening terminals.
+
+---
+
+## 4.3 Transcription routing
+This is the biggest frontend/Tauri change.
+
+Current Meetily logic heavily assumes local engine use (`localWhisper` / `parakeet`).
+For `fasterWhisperServer`, we need a separate route:
+- no local Whisper model validation in Tauri
+- use backend provider health check instead
+- use backend upload/transcription endpoint
+
+### Recommended rollout
+#### Phase 2A — safe scope
+Enable `fasterWhisperServer` for:
+- imported audio files
+- post-recording transcription
+- explicit “transcribe this file” workflows
+
+#### Phase 2B — larger scope
+Enable `fasterWhisperServer` for **live meeting transcription while recording**.
+This likely requires more refactoring because the current live path is built around local engines and chunk pipelines.
+
+### My recommendation
+Implement **Phase 2A first**.
+Then, once stable, decide whether to do full live streaming/chunk transcription via HTTP.
+
+---
+
+## 4.4 Live transcription design options
+If you want live meeting transcription via `faster-whisper-server`, there are two possible designs.
+
+### Option 1 — chunk upload polling model
+- Tauri captures local audio chunks
+- chunk or rolling window is sent to Meetily backend
+- backend forwards to faster-whisper-server
+- results are streamed back to UI
+
+**Pros:** easier to fit current architecture
+**Cons:** more HTTP overhead, more latency, deduplication complexity
+
+### Option 2 — rolling segment transcription model
+- Tauri buffers audio locally
+- backend transcribes larger rolling windows (e.g. 5–15 seconds)
+- UI updates less frequently but with better accuracy
+
+**Pros:** more CPU-efficient and simpler for Whisper-style models
+**Cons:** less “instant” feeling
+
+### Recommendation for CPU-only laptops
+Use **rolling windows**, not ultra-fine streaming. It is more realistic for CPU-only transcription.
+
+---
+
+## 5. Model strategy for CPU laptops
+Recommended model menu:
+- `base` → default
+- `small` → recommended for better accuracy on stronger CPUs
+- `medium` → optional advanced
+- maybe hide `large-v3` behind “advanced / slower” warning
+
+### Suggested UX copy
+- `base`: Fastest local CPU mode
+- `small`: Better accuracy, moderate CPU load
+- `medium`: High accuracy, slower on CPU
+- `large-v3`: Best accuracy, may be too slow for real-time CPU use
+
+---
+
+## 6. Local-only deployment plan
+Because the app must run locally on laptops, the final product should manage local processes automatically.
+
+## 6.1 Process orchestration
+Meetily should be able to:
+- detect whether faster-whisper-server is already running
+- start it automatically if not running
+- stop it on app exit if Meetily launched it
+- avoid duplicate instances
+
+### Recommended owner
+Tauri side should orchestrate the helper processes.
+That is better than asking users to run separate terminals manually.
+
+---
+
+## 6.2 Model cache and storage
+Use local storage directories for:
+- faster-whisper models
+- Meetily database
+- recordings
+- logs
+
+Recommended principle:
+- one predictable app-data root
+- subfolders for backend, models, recordings, logs
+
+This is critical for installer packaging.
+
+---
+
+## 7. Installer / packaging plan
+For laptop deployment, you will eventually want a **single installable desktop product**.
+
+## 7.1 Packaging options
+### Best option
+Bundle:
+- Meetily desktop app
+- Meetily backend virtual environment or packaged Python app
+- faster-whisper-server runtime
+- startup scripts / process management
+- optionally preconfigured CPU model download logic
+
+### On Windows
+Good installer candidates:
+- Tauri bundler + additional packaged binaries/resources
+- or Tauri + MSI/NSIS with helper-process installation
+
+### On macOS
+Use:
+- Tauri app bundle
+- embedded helper scripts/processes
+- app data directories for runtime assets
+
+---
+
+## 7.2 CPU-first installation behavior
+Installer or first-run setup should:
+1. install Meetily
+2. prepare backend runtime
+3. prepare faster-whisper-server runtime
+4. on first launch:
+   - check for model
+   - download default CPU model (`base` or `small`)
+   - save transcript config to `fasterWhisperServer`
+   - verify health
+
+### Important usability note
+Model download should be part of onboarding with progress, not hidden.
+
+---
+
+## 8. Testing plan
+## 8.1 Backend tests
+- provider client tests
+- response mapping tests
+- health endpoint tests
+- transcription endpoint tests
+- config persistence tests
+
+## 8.2 Frontend tests
+- provider selection UI
+- server URL persistence
+- health-check status rendering
+- imported-file transcription workflow
+- regression tests for `localWhisper` and `parakeet`
+
+## 8.3 End-to-end tests
+On CPU laptop target:
+- launch app from clean install
+- download model
+- check provider health
+- transcribe a sample file
+- store transcript in meeting
+- generate summary
+- reopen app and confirm settings persist
+
+## 8.4 Performance validation
+Measure on representative CPU laptops:
+- model load time
+- first transcription latency
+- rolling transcription latency
+- CPU utilization
+- memory usage
+
+---
+
+## 9. Risk areas
+### 1. Live transcription latency on CPU
+Mitigation:
+- prefer `base` / `small`
+- use rolling windows
+- avoid too frequent chunk uploads
+
+### 2. Multiple Python runtimes / dependency conflicts
+Mitigation:
+- isolate Meetily backend env
+- isolate faster-whisper-server env or unify into one packaged runtime later
+
+### 3. Windows path and process-launch quirks
+Mitigation:
+- standardize process launch via Tauri-managed commands
+- avoid fragile shell quoting in production
+
+### 4. Model download and startup time
+Mitigation:
+- explicit first-run onboarding
+- background preload
+- health screen with progress
+
+---
+
+## 10. Recommended delivery roadmap
+### Phase 1
+Backend integration
+- provider client
+- config storage
+- health endpoint
+- transcription proxy endpoint
+
+### Phase 2A
+Frontend integration for local CPU provider
+- settings UI
+- URL/model config
+- health check UI
+- imported-file / post-recording transcription path
+
+### Phase 2B
+Optional live transcription support
+- refactor live transcription routing
+- rolling-window HTTP provider flow
+- transcript dedup / latency tuning
+
+### Phase 3
+Installer and local process orchestration
+- package backend + faster-whisper-server
+- auto-start / auto-stop helper services
+- onboarding + model download
+
+### Phase 4
+CPU optimization and polish
+- better defaults
+- performance presets
+- diagnostics page
+- logs and support tooling
+
+---
+
+## 11. My recommendation for your specific goal
+Since your target is **strong CPU laptops without GPUs**, I recommend this exact product direction:
+- make `fasterWhisperServer` the **default local transcription provider** for packaged installs
+- use **CPU + int8**
+- default to `base`, allow upgrade to `small`
+- implement **Phase 2A first**, not full live streaming immediately
+- package everything so the user launches **one app only**
+
+That gives the highest chance of a stable, usable local product.
+
+If you want, I can next turn this into a **file-by-file implementation roadmap** for:
+1. backend remaining work
+2. frontend/Tauri changes
+3. packaging/installer changes
+
+If you want implementation after that, please **toggle to Act mode** and I’ll execute it step by step.
