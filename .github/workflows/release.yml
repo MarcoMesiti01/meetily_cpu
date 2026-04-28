@@ -29,6 +29,10 @@ jobs:
           echo "Node version: $(node -v)"
           echo "pnpm version: $(pnpm -v)"
           echo "pnpm-lock.yaml sha256: $(sha256sum pnpm-lock.yaml | awk '{print $1}')"
+          if [ ! -f meetily/frontend/pnpm-lock.yaml ]; then
+            echo "ERROR: meetily/frontend/pnpm-lock.yaml is missing in repository checkout. Commit this lockfile for deterministic release builds." >&2
+            exit 1
+          fi
           echo "meetily/frontend/pnpm-lock.yaml sha256: $(sha256sum meetily/frontend/pnpm-lock.yaml | awk '{print $1}')"
           echo "--- pnpm-lock.yaml (first 40 lines) ---"
           sed -n '1,40p' pnpm-lock.yaml
