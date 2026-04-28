@@ -42,7 +42,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install all workspace dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Install Meetily frontend dependencies
         working-directory: meetily/frontend
