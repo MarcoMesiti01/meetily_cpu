@@ -29,8 +29,11 @@ jobs:
           echo "Node version: $(node -v)"
           echo "pnpm version: $(pnpm -v)"
           echo "pnpm-lock.yaml sha256: $(sha256sum pnpm-lock.yaml | awk '{print $1}')"
+          echo "meetily/frontend/pnpm-lock.yaml sha256: $(sha256sum meetily/frontend/pnpm-lock.yaml | awk '{print $1}')"
           echo "--- pnpm-lock.yaml (first 40 lines) ---"
           sed -n '1,40p' pnpm-lock.yaml
+          echo "--- meetily/frontend/pnpm-lock.yaml (first 40 lines) ---"
+          sed -n '1,40p' meetily/frontend/pnpm-lock.yaml
           echo "--- pnpm-workspace.yaml overrides block ---"
           awk '
             /^overrides:/ {print; in_block=1; next}
@@ -42,11 +45,19 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install all workspace dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Install Meetily frontend dependencies
         working-directory: meetily/frontend
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-workspace
+
+      - name: Verify native Windows toolchain
+        shell: pwsh
+        run: |
+          cargo --version
+          rustc --version
+          where.exe link
+          where.exe cl
 
       - name: Verify Tauri CLI is available
         working-directory: meetily/frontend
