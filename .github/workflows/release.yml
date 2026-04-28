@@ -48,6 +48,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Install all workspace dependencies
         run: pnpm install --frozen-lockfile
 
@@ -60,8 +63,13 @@ jobs:
         run: |
           cargo --version
           rustc --version
-          where.exe link
-          where.exe cl
+          $clPath = (Get-Command cl.exe -ErrorAction Stop).Source
+          $linkPath = (Get-Command link.exe -ErrorAction Stop).Source
+          Write-Host "cl.exe: $clPath"
+          Write-Host "link.exe: $linkPath"
+          if ($clPath -notmatch 'Microsoft Visual Studio') {
+            throw "cl.exe is not from Visual Studio toolchain"
+          }
 
       - name: Verify Tauri CLI is available
         working-directory: meetily/frontend
