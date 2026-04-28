@@ -26,15 +26,22 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install frontend dependencies
-        # Run install ONLY inside meetily/frontend to avoid the root
-        # pnpm-workspace.yaml overrides that exclude Windows platform binaries
-        # (those overrides are Replit/Linux-only and break Windows CI builds)
-        working-directory: meetily/frontend
-        run: pnpm install --no-frozen-lockfile --ignore-workspace
-        env:
-          # Tell pnpm to ignore the root workspace config entirely
-          npm_config_ignore_workspace_root_check: "true"
+      - name: Remove Linux-only overrides from pnpm-workspace.yaml
+        # The root pnpm-workspace.yaml contains overrides that exclude all
+        # Windows/macOS/ARM platform binaries (written for Replit Linux servers).
+        # These cause ERR_PNPM_LOCKFILE_CONFIG_MISMATCH on Windows CI.
+        # We strip the entire overrides block before installing.
+        shell: pwsh
+        run: |
+          $content = Get-Content pnpm-workspace.yaml -Raw
+          # Remove everything from the 'overrides:' key to end of file
+          $content = $content -replace '(?s)\noverrides:.*$', ''
+          Set-Content pnpm-workspace.yaml $content
+          Write-Host "Cleaned pnpm-workspace.yaml:"
+          Get-Content pnpm-workspace.yaml
+
+      - name: Install all workspace dependencies
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build Tauri app
         working-directory: meetily/frontend
