@@ -21,7 +21,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v3
         with:
-          version: 9
+          version: 10.33.2
 
       - name: CI diagnostics (Node/pnpm/lockfile/overrides)
         shell: bash
@@ -43,6 +43,16 @@ jobs:
 
       - name: Install all workspace dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Install Meetily frontend dependencies
+        working-directory: meetily/frontend
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Verify Tauri CLI is available
+        working-directory: meetily/frontend
+        shell: bash
+        run: |
+          pnpm exec tauri --version
 
       - name: Build Tauri app
         working-directory: meetily/frontend
