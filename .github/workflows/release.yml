@@ -23,11 +23,26 @@ jobs:
         with:
           version: 9
 
+      - name: CI diagnostics (Node/pnpm/lockfile/overrides)
+        shell: bash
+        run: |
+          echo "Node version: $(node -v)"
+          echo "pnpm version: $(pnpm -v)"
+          echo "pnpm-lock.yaml sha256: $(sha256sum pnpm-lock.yaml | awk '{print $1}')"
+          echo "--- pnpm-lock.yaml (first 40 lines) ---"
+          sed -n '1,40p' pnpm-lock.yaml
+          echo "--- pnpm-workspace.yaml overrides block ---"
+          awk '
+            /^overrides:/ {print; in_block=1; next}
+            in_block && /^[^[:space:]]/ {exit}
+            in_block {print}
+          ' pnpm-workspace.yaml
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install all workspace dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Build Tauri app
         working-directory: meetily/frontend
