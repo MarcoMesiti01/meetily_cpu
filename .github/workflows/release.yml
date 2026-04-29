@@ -58,6 +58,21 @@ jobs:
         working-directory: meetily/frontend
         run: pnpm install --frozen-lockfile --ignore-workspace
 
+      - name: Build llama-helper sidecar (Windows CPU)
+        shell: pwsh
+        run: |
+          cargo build --release -p llama-helper --manifest-path meetily/Cargo.toml
+          New-Item -ItemType Directory -Force -Path "meetily/frontend/src-tauri/binaries" | Out-Null
+          Copy-Item "meetily/target/release/llama-helper.exe" -Destination "meetily/frontend/src-tauri/binaries/llama-helper-x86_64-pc-windows-msvc.exe" -Force
+          Get-ChildItem "meetily/frontend/src-tauri/binaries"
+
+      - name: Verify sidecar binaries exist
+        shell: pwsh
+        run: |
+          if (!(Test-Path "meetily/frontend/src-tauri/binaries/llama-helper-x86_64-pc-windows-msvc.exe")) {
+            throw "Missing llama-helper sidecar binary"
+          }
+
       - name: Verify native Windows toolchain
         shell: pwsh
         run: |
