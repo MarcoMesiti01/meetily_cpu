@@ -46,6 +46,7 @@ pub mod ollama;
 pub mod onboarding;
 pub mod openai;
 pub mod anthropic;
+pub mod process_manager;
 pub mod groq;
 pub mod openrouter;
 pub mod parakeet_engine;
@@ -396,6 +397,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .manage(process_manager::ProcessManagerState::new())
         .manage(whisper_engine::parallel_commands::ParallelProcessorState::new())
         .manage(Arc::new(RwLock::new(
             None::<notifications::manager::NotificationManager<tauri::Wry>>,
@@ -404,6 +406,10 @@ pub fn run() {
         .manage(summary::summary_engine::ModelManagerState(Arc::new(tokio::sync::Mutex::new(None))))
         .setup(|_app| {
             log::info!("Application setup complete");
+
+            let process_manager_state = _app.state::<process_manager::ProcessManagerState>();
+            process_manager_state.start_monitoring(_app.handle().clone());
+            tauri::async_runtime::block_on(process_manager_state.start_bootstrap(_app.handle().clone()));
 
             // Initialize system tray
             if let Err(e) = tray::create_tray(_app.handle()) {
@@ -626,6 +632,10 @@ pub fn run() {
             api::test_backend_connection,
             api::debug_backend_connection,
             api::open_external_url,
+            process_manager::commands::get_bootstrap_status,
+            process_manager::commands::restart_helper_service,
+            process_manager::commands::start_helper_service,
+            process_manager::commands::stop_helper_service,
             // Custom OpenAI commands
             api::api_save_custom_openai_config,
             api::api_get_custom_openai_config,
@@ -739,6 +749,11 @@ pub fn run() {
                     log::info!("Cleaning up sidecar...");
                     if let Err(e) = summary::summary_engine::force_shutdown_sidecar().await {
                         log::error!("Failed to force shutdown sidecar: {}", e);
+                    }
+
+                    if let Some(process_manager_state) = _app_handle.try_state::<process_manager::ProcessManagerState>() {
+                        log::info!("Shutting down helper processes...");
+                        process_manager_state.shutdown_all(_app_handle.clone()).await;
                     }
                 });
                 log::info!("Application cleanup complete");

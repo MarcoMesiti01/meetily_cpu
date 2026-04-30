@@ -40,6 +40,95 @@ console.log(''); // Empty line for spacing
 const platform = os.platform();
 const env = { ...process.env };
 
+function prependToPath(dir) {
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'PATH';
+  env[pathKey] = `${dir}${path.delimiter}${env[pathKey] || ''}`;
+}
+
+function configureLibclangOnWindows() {
+  if (platform !== 'win32' || env.LIBCLANG_PATH) {
+    return;
+  }
+
+  const candidates = [
+    'C:\\Program Files\\LLVM\\bin',
+    'C:\\Program Files (x86)\\LLVM\\bin',
+    'C:\\ProgramData\\chocolatey\\lib\\llvm\\tools\\LLVM\\bin',
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, 'libclang.dll'))) {
+      env.LIBCLANG_PATH = candidate;
+      prependToPath(candidate);
+      console.log(`🔧 Using libclang from: ${candidate}`);
+      return;
+    }
+  }
+
+  console.warn('⚠️  libclang.dll was not found in common LLVM locations.');
+  console.warn('   If the Rust build fails in whisper-rs-sys, install LLVM and retry:');
+  console.warn('   winget install LLVM.LLVM   (or: choco install llvm -y)');
+}
+
+function configureCmakeOnWindows() {
+  if (platform !== 'win32') {
+    return;
+  }
+
+  const candidates = [
+    'C:\\Program Files\\CMake\\bin',
+    'C:\\Program Files (x86)\\CMake\\bin',
+    'C:\\ProgramData\\chocolatey\\bin',
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, 'cmake.exe'))) {
+      prependToPath(candidate);
+      console.log(`🔧 Using CMake from: ${candidate}`);
+      return;
+    }
+  }
+
+  console.warn('⚠️  cmake.exe was not found in common locations.');
+  console.warn('   If the Rust build fails in whisper-rs-sys, install CMake and retry:');
+  console.warn('   winget install Kitware.CMake   (or: choco install cmake -y)');
+}
+
+configureLibclangOnWindows();
+configureCmakeOnWindows();
+
+function ensureLlamaSidecarForDev() {
+  if (command !== 'dev') return;
+
+  const workspaceRoot = path.resolve(process.cwd(), '..');
+  const sidecarDir = path.resolve(process.cwd(), 'src-tauri', 'binaries');
+  const sidecarPath = path.join(sidecarDir, 'llama-helper-x86_64-pc-windows-msvc.exe');
+
+  if (platform !== 'win32') return;
+  if (fs.existsSync(sidecarPath)) return;
+
+  console.log('🔧 Building llama-helper sidecar for local dev...');
+  if (!fs.existsSync(sidecarDir)) {
+    fs.mkdirSync(sidecarDir, { recursive: true });
+  }
+
+  execSync('cargo build --release -p llama-helper', {
+    stdio: 'inherit',
+    cwd: workspaceRoot,
+    env,
+  });
+
+  const builtSidecar = path.join(workspaceRoot, 'target', 'release', 'llama-helper.exe');
+  if (!fs.existsSync(builtSidecar)) {
+    throw new Error(`Expected sidecar was not built: ${builtSidecar}`);
+  }
+
+  fs.copyFileSync(builtSidecar, sidecarPath);
+  console.log(`✅ Sidecar ready: ${sidecarPath}`);
+}
+
+ensureLlamaSidecarForDev();
+
 if (platform === 'linux' && feature === 'cuda') {
   console.log('🐧 Linux/CUDA detected: Setting CMAKE flags for NVIDIA GPU');
   env.CMAKE_CUDA_ARCHITECTURES = '75';

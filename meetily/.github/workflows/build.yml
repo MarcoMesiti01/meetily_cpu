@@ -185,6 +185,20 @@ jobs:
 
           Write-Host "=== Vulkan SDK Configuration Complete ==="
 
+      - name: Install native build tools for whisper-rs (Windows)
+        if: contains(inputs.platform, 'windows')
+        shell: pwsh
+        run: |
+          choco install cmake -y --installargs 'ADD_CMAKE_TO_PATH=System' --no-progress
+          choco install llvm -y --no-progress
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          if (!(Test-Path "$llvmBin\libclang.dll")) {
+            throw "libclang.dll not found at $llvmBin after LLVM install"
+          }
+          "LIBCLANG_PATH=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PATH=$llvmBin;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Configured LIBCLANG_PATH=$llvmBin"
+
       - name: Copy Vulkan runtime for bundling (Windows)
         if: contains(inputs.platform, 'windows')
         shell: pwsh
