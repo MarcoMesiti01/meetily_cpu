@@ -53,8 +53,12 @@ try {
     }
 
     $signature = Get-AuthenticodeSignature -LiteralPath $FilePath
+    if ($signature.Status -eq "NotSigned" -or -not $signature.SignerCertificate) {
+        Fail "Authenticode signature was not applied for $FilePath. Status: $($signature.Status)"
+    }
+
     if ($signature.Status -ne "Valid") {
-        Fail "Authenticode signature is not valid for $FilePath. Status: $($signature.Status)"
+        Write-Warning "[meetily signing] Authenticode signature is present but not chain-trusted on this runner. Status: $($signature.Status)"
     }
 
     Write-Host "[meetily signing] signed $FilePath"

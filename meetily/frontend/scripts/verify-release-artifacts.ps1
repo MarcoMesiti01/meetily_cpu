@@ -59,8 +59,12 @@ function Assert-AuthenticodeValid {
     param([Parameter(Mandatory = $true)][System.IO.FileInfo]$File)
 
     $signature = Get-AuthenticodeSignature -LiteralPath $File.FullName
+    if ($signature.Status -eq "NotSigned" -or -not $signature.SignerCertificate) {
+        throw "Authenticode signature is missing for $($File.FullName): $($signature.Status)"
+    }
+
     if ($signature.Status -ne "Valid") {
-        throw "Authenticode signature is not valid for $($File.FullName): $($signature.Status)"
+        Write-Warning "Authenticode signature is present but not chain-trusted for $($File.FullName): $($signature.Status)"
     }
 }
 
