@@ -14,6 +14,8 @@ export type ServiceRuntimeState = {
   port: number;
   restartCount: number;
   startedByMeetily: boolean;
+  runtimeSource?: string | null;
+  resolvedPath?: string | null;
   lastError?: string | null;
   lastReadyAt?: string | null;
 };
@@ -31,6 +33,8 @@ const initialService = (service: HelperService, port: number): ServiceRuntimeSta
   port,
   restartCount: 0,
   startedByMeetily: false,
+  runtimeSource: null,
+  resolvedPath: null,
   lastError: null,
   lastReadyAt: null,
 });

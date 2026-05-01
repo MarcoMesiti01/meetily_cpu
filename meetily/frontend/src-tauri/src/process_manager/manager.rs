@@ -1,3 +1,7 @@
+use super::cpu_profiles::{
+    detect_default_profile, render_faster_whisper_config, resolve_profile, CpuOptimizationSettings,
+    HardwareClass, PROFILE_SETTINGS_FILE,
+};
 use super::health::{is_backend_ready, is_faster_whisper_ready, wait_until};
 use super::runtime_paths::{
     path_list_separator, resolve_runtime_paths, RuntimePaths, RuntimeSource,
@@ -17,7 +21,6 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration as TokioDuration};
 
 const MAX_RESTARTS: u8 = 3;
-const FASTER_WHISPER_MODEL_ID: &str = "Systran/faster-whisper-base";
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -460,8 +463,9 @@ impl ProcessManagerState {
             .await?;
 
         if paths.source == RuntimeSource::Bundled {
-            let model_dir = ensure_model_cache(&paths)?;
-            let config_path = write_faster_whisper_config(&paths, &model_dir)?;
+            let profile = resolve_cpu_profile(&app, &paths)?;
+            let model_dir = ensure_profile_model_cache(&paths, &profile)?;
+            let config_path = write_faster_whisper_config(&paths, &model_dir, &profile)?;
             let fws_exe = faster_whisper_console_script(&paths);
             if !fws_exe.is_file() {
                 let msg = format!(
@@ -485,9 +489,12 @@ impl ProcessManagerState {
                 .env("HF_HOME", &paths.hf_home)
                 .env("HF_HUB_OFFLINE", "1")
                 .env("ENABLE_UI", "false")
-                .env("WHISPER__MODEL", FASTER_WHISPER_MODEL_ID)
+                .env("WHISPER__MODEL", &profile.effective_model)
                 .env("WHISPER__INFERENCE_DEVICE", "cpu")
-                .env("WHISPER__COMPUTE_TYPE", "int8")
+                .env("WHISPER__COMPUTE_TYPE", &profile.compute_type)
+                .env("OMP_NUM_THREADS", profile.cpu_threads.to_string())
+                .env("MKL_NUM_THREADS", profile.cpu_threads.to_string())
+                .env("NUMEXPR_NUM_THREADS", profile.cpu_threads.to_string())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
 
@@ -739,7 +746,7 @@ fn process_path_with_python(paths: &RuntimePaths) -> String {
         .unwrap_or_default()
 }
 
-fn ensure_model_cache(paths: &RuntimePaths) -> Result<PathBuf, String> {
+pub(super) fn ensure_model_cache(paths: &RuntimePaths) -> Result<PathBuf, String> {
     let destination = paths.hf_home.join("faster-whisper-base");
     if destination.is_dir() {
         return Ok(destination);
@@ -780,19 +787,72 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn write_faster_whisper_config(paths: &RuntimePaths, model_dir: &Path) -> Result<PathBuf, String> {
+fn ensure_profile_model_cache(
+    paths: &RuntimePaths,
+    profile: &super::cpu_profiles::ResolvedCpuProfile,
+) -> Result<PathBuf, String> {
+    if profile.effective_model == super::cpu_profiles::SMALL_MODEL_ID {
+        let small_destination = paths.hf_home.join("faster-whisper-small");
+        if small_destination.is_dir() {
+            return Ok(small_destination);
+        }
+    }
+
+    ensure_model_cache(paths)
+}
+
+fn write_faster_whisper_config(
+    paths: &RuntimePaths,
+    model_dir: &Path,
+    profile: &super::cpu_profiles::ResolvedCpuProfile,
+) -> Result<PathBuf, String> {
     fs::create_dir_all(&paths.hf_home)
         .map_err(|e| format!("Could not create {}: {}", paths.hf_home.display(), e))?;
     let config_path = paths.hf_home.join("meetily-faster-whisper.yaml");
     let model_path = model_dir.display().to_string().replace('\\', "/");
-    let config = format!(
-        "batch_size: 1\nmodel_options:\n  device: cpu\n  compute_type: int8\nmodels:\n  - name: {model_id}\n    path: \"{model_path}\"\n    model_options:\n      device: cpu\n      compute_type: int8\n    transcribe_options:\n      beam_size: 5\n      vad_filter: true\n",
-        model_id = FASTER_WHISPER_MODEL_ID,
-        model_path = model_path
-    );
+    let config = render_faster_whisper_config(&model_path, profile);
     fs::write(&config_path, config)
         .map_err(|e| format!("Could not write {}: {}", config_path.display(), e))?;
     Ok(config_path)
+}
+
+fn resolve_cpu_profile<R: Runtime>(
+    app: &AppHandle<R>,
+    paths: &RuntimePaths,
+) -> Result<super::cpu_profiles::ResolvedCpuProfile, String> {
+    let profile_settings_path = paths
+        .database_path
+        .parent()
+        .map(|app_data| app_data.join(PROFILE_SETTINGS_FILE))
+        .unwrap_or_else(|| paths.hf_home.join(PROFILE_SETTINGS_FILE));
+    let settings = fs::read_to_string(profile_settings_path)
+        .ok()
+        .and_then(|payload| serde_json::from_str::<CpuOptimizationSettings>(&payload).ok())
+        .unwrap_or_default();
+    let small_model_available = paths.hf_home.join("faster-whisper-small").is_dir()
+        || app
+            .path()
+            .resource_dir()
+            .map(|resource_dir| resource_dir.join("models/faster-whisper-small").is_dir())
+            .unwrap_or(false);
+    let hardware = HardwareClass {
+        cpu_cores: std::thread::available_parallelism()
+            .map(|cores| cores.get())
+            .unwrap_or(4),
+        memory_gb: std::env::var("MEMORY_GB")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(8),
+        small_model_available,
+    };
+    let detected_default = detect_default_profile(hardware);
+    Ok(resolve_profile(
+        settings.performance_profile,
+        detected_default,
+        settings.battery_throttle_enabled,
+        false,
+        small_model_available,
+    ))
 }
 
 fn apply_no_window(command: &mut Command) {

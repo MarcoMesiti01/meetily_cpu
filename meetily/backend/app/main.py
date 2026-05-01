@@ -655,6 +655,8 @@ class TranscriptionConfigRequest(BaseModel):
     model: str = provider_config.DEFAULT_MODEL
     language: Optional[str] = provider_config.DEFAULT_LANGUAGE
     computeType: str = provider_config.DEFAULT_COMPUTE_TYPE
+    performanceProfile: str = provider_config.DEFAULT_PERFORMANCE_PROFILE
+    batteryThrottleEnabled: bool = provider_config.DEFAULT_BATTERY_THROTTLE_ENABLED
 
 
 @app.get("/transcription-config")
@@ -677,6 +679,8 @@ async def save_transcription_config(payload: TranscriptionConfigRequest):
             model=payload.model,
             language=payload.language,
             compute_type=payload.computeType,
+            performance_profile=payload.performanceProfile,
+            battery_throttle_enabled=payload.batteryThrottleEnabled,
         )
     except Exception as exc:
         logger.error("Failed to save transcription config: %s", exc, exc_info=True)
@@ -701,14 +705,17 @@ async def faster_whisper_server_health(serverUrl: Optional[str] = None):
 # Bounded concurrency for CPU transcription (integration plan §3.4):
 # only one heavy transcription job runs at a time on a single-CPU laptop.
 _transcription_lock = asyncio_lock = None  # populated lazily on first request
+_transcription_lock_size = None
 
 
-async def _transcription_semaphore():
-    """Lazy-initialize a single-slot asyncio.Semaphore for serialized jobs."""
-    global asyncio_lock
-    if asyncio_lock is None:
+async def _transcription_semaphore(max_concurrent_jobs: int = 1):
+    """Lazy-initialize a bounded asyncio.Semaphore for CPU transcription jobs."""
+    global asyncio_lock, _transcription_lock_size
+    safe_limit = max(1, min(int(max_concurrent_jobs or 1), 1))
+    if asyncio_lock is None or _transcription_lock_size != safe_limit:
         import asyncio as _asyncio
-        asyncio_lock = _asyncio.Semaphore(1)
+        asyncio_lock = _asyncio.Semaphore(safe_limit)
+        _transcription_lock_size = safe_limit
     return asyncio_lock
 
 
@@ -736,11 +743,11 @@ async def transcribe_audio(
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-    sem = await _transcription_semaphore()
+    sem = await _transcription_semaphore(cfg.get("maxConcurrentJobs", 1))
     async with sem:
         client = FasterWhisperServerClient(
             server_url=cfg["serverUrl"],
-            model=model or cfg["model"],
+            model=model or cfg.get("effectiveModel") or cfg["model"],
             language=language if language is not None else cfg["language"],
         )
         try:

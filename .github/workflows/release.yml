@@ -8,8 +8,88 @@ on:
 permissions:
   contents: write
 
+env:
+  FRONTEND_DIR: meetily/frontend
+  RELEASE_ASSET_DIR: meetily/release-assets
+  RELEASE_SMOKE_LOG_DIR: meetily/smoke-logs
+
 jobs:
-  build-windows:
+  validate:
+    name: Validate release inputs
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Resolve release metadata
+        id: meta
+        shell: pwsh
+        run: |
+          $tag = "${env:GITHUB_REF_NAME}"
+          if (-not $tag.StartsWith("v")) {
+            throw "Release workflow only supports v-prefixed tags. Got: $tag"
+          }
+
+          $version = $tag.Substring(1)
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Release tag: $tag"
+          Write-Host "Release version: $version"
+
+      - name: Require signing secrets
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_CERTIFICATE_P12_BASE64: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_P12_BASE64 }}
+          WINDOWS_CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          $required = @(
+            "WINDOWS_CODESIGN_CERTIFICATE_P12_BASE64",
+            "WINDOWS_CODESIGN_CERTIFICATE_PASSWORD",
+            "TAURI_SIGNING_PRIVATE_KEY",
+            "TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          )
+
+          $missing = @()
+          foreach ($name in $required) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              $missing += $name
+            }
+          }
+
+          if ($missing.Count -gt 0) {
+            throw "Missing required signing secrets for tagged release: $($missing -join ', ')"
+          }
+
+          Write-Host "All required signing secrets are present."
+
+      - name: Validate locked dependency inputs
+        shell: pwsh
+        run: |
+          $requiredFiles = @(
+            "pnpm-lock.yaml",
+            "pnpm-workspace.yaml",
+            "meetily/frontend/pnpm-lock.yaml",
+            "meetily/Cargo.lock",
+            "meetily/frontend/src-tauri/tauri.conf.json"
+          )
+
+          foreach ($path in $requiredFiles) {
+            if (!(Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Missing release input: $path"
+            }
+          }
+
+          Write-Host "Release lockfiles and Tauri config are present."
+
+  build-runtime:
+    name: Build bundled runtime
+    needs: validate
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,28 +105,6 @@ jobs:
         uses: pnpm/action-setup@v3
         with:
           version: 10.33.2
-
-      - name: CI diagnostics (Node/pnpm/lockfile/overrides)
-        shell: bash
-        run: |
-          echo "Node version: $(node -v)"
-          echo "pnpm version: $(pnpm -v)"
-          echo "pnpm-lock.yaml sha256: $(sha256sum pnpm-lock.yaml | awk '{print $1}')"
-          if [ ! -f meetily/frontend/pnpm-lock.yaml ]; then
-            echo "ERROR: meetily/frontend/pnpm-lock.yaml is missing in repository checkout. Commit this lockfile for deterministic release builds." >&2
-            exit 1
-          fi
-          echo "meetily/frontend/pnpm-lock.yaml sha256: $(sha256sum meetily/frontend/pnpm-lock.yaml | awk '{print $1}')"
-          echo "--- pnpm-lock.yaml (first 40 lines) ---"
-          sed -n '1,40p' pnpm-lock.yaml
-          echo "--- meetily/frontend/pnpm-lock.yaml (first 40 lines) ---"
-          sed -n '1,40p' meetily/frontend/pnpm-lock.yaml
-          echo "--- pnpm-workspace.yaml overrides block ---"
-          awk '
-            /^overrides:/ {print; in_block=1; next}
-            in_block && /^[^[:space:]]/ {exit}
-            in_block {print}
-          ' pnpm-workspace.yaml
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -66,34 +124,105 @@ jobs:
           "LIBCLANG_PATH=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "PATH=$llvmBin;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Install all workspace dependencies
+      - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install Meetily frontend dependencies
-        working-directory: meetily/frontend
+      - name: Install frontend dependencies
+        working-directory: ${{ env.FRONTEND_DIR }}
         run: pnpm install --frozen-lockfile --ignore-workspace
 
-      - name: Build llama-helper sidecar (Windows CPU)
+      - name: Build llama-helper sidecar
         shell: pwsh
         run: |
-          cargo build --release -p llama-helper --manifest-path meetily/Cargo.toml
+          cargo build --locked --release -p llama-helper --manifest-path meetily/Cargo.toml
           New-Item -ItemType Directory -Force -Path "meetily/frontend/src-tauri/binaries" | Out-Null
           Copy-Item "meetily/target/release/llama-helper.exe" -Destination "meetily/frontend/src-tauri/binaries/llama-helper-x86_64-pc-windows-msvc.exe" -Force
-          Get-ChildItem "meetily/frontend/src-tauri/binaries"
 
-      - name: Verify sidecar binaries exist
-        shell: pwsh
-        run: |
-          if (!(Test-Path "meetily/frontend/src-tauri/binaries/llama-helper-x86_64-pc-windows-msvc.exe")) {
-            throw "Missing llama-helper sidecar binary"
-          }
-
-      - name: Package bundled Windows Python runtime
-        working-directory: meetily/frontend
+      - name: Package and smoke bundled Windows runtime
+        working-directory: ${{ env.FRONTEND_DIR }}
         shell: pwsh
         run: |
           .\scripts\package-windows-runtime.ps1
           .\scripts\smoke-bundled-runtime.ps1 -RequireModel
+
+      - name: Upload runtime bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-runtime-bundle
+          if-no-files-found: error
+          path: |
+            meetily/frontend/src-tauri/resources/**
+            meetily/frontend/src-tauri/binaries/**
+
+  build-signed-installer:
+    name: Build signed installer
+    needs:
+      - validate
+      - build-runtime
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10.33.2
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install native build tools for whisper-rs
+        shell: pwsh
+        run: |
+          choco install cmake -y --installargs 'ADD_CMAKE_TO_PATH=System' --no-progress
+          choco install llvm -y --no-progress
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          if (!(Test-Path "$llvmBin\libclang.dll")) {
+            throw "libclang.dll not found at $llvmBin after LLVM install"
+          }
+          "LIBCLANG_PATH=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PATH=$llvmBin;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install frontend dependencies
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: pnpm install --frozen-lockfile --ignore-workspace
+
+      - name: Build llama-helper sidecar
+        shell: pwsh
+        run: |
+          cargo build --locked --release -p llama-helper --manifest-path meetily/Cargo.toml
+          New-Item -ItemType Directory -Force -Path "meetily/frontend/src-tauri/binaries" | Out-Null
+          Copy-Item "meetily/target/release/llama-helper.exe" -Destination "meetily/frontend/src-tauri/binaries/llama-helper-x86_64-pc-windows-msvc.exe" -Force
+
+      - name: Package bundled Windows runtime
+        working-directory: ${{ env.FRONTEND_DIR }}
+        shell: pwsh
+        run: |
+          .\scripts\package-windows-runtime.ps1
+          .\scripts\smoke-bundled-runtime.ps1 -RequireModel
+
+      - name: Sign sidecar binaries
+        working-directory: ${{ env.FRONTEND_DIR }}
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_CERTIFICATE_P12_BASE64: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_P12_BASE64 }}
+          WINDOWS_CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PASSWORD }}
+        run: |
+          Get-ChildItem "src-tauri\binaries" -Filter "*.exe" -File -Recurse |
+            ForEach-Object { .\scripts\sign-windows.ps1 -FilePath $_.FullName }
 
       - name: Verify native Windows toolchain
         shell: pwsh
@@ -109,40 +238,140 @@ jobs:
           }
 
       - name: Verify Tauri CLI is available
-        working-directory: meetily/frontend
-        shell: bash
-        run: |
-          pnpm exec tauri --version
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: pnpm exec tauri --version
 
-      - name: Configure updater signing mode
-        working-directory: meetily/frontend
-        shell: bash
+      - name: Build signed Tauri app
+        working-directory: ${{ env.FRONTEND_DIR }}
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "TAURI signing private key not set: disabling updater artifact signing for this build"
-            node -e "const fs=require('fs');const p='src-tauri/tauri.conf.json';const c=JSON.parse(fs.readFileSync(p,'utf8'));c.bundle=c.bundle||{};c.bundle.createUpdaterArtifacts=false;fs.writeFileSync(p,JSON.stringify(c,null,2));"
-          else
-            echo "TAURI signing private key found: updater artifacts remain enabled"
-          fi
-
-      - name: Build Tauri app
-        working-directory: meetily/frontend
-        env:
+          WINDOWS_CODESIGN_CERTIFICATE_P12_BASE64: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_P12_BASE64 }}
+          WINDOWS_CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PASSWORD }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build
 
-      - name: Verify bundle artifacts exist
+      - name: Normalize release artifact names
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          $assetDir = "${env:RELEASE_ASSET_DIR}"
+          New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
+
+          $nsis = Get-ChildItem "meetily/target/release/bundle/nsis" -Filter "*.exe" -File -Recurse | Sort-Object FullName | Select-Object -First 1
+          $msi = Get-ChildItem "meetily/target/release/bundle/msi" -Filter "*.msi" -File -Recurse | Sort-Object FullName | Select-Object -First 1
+          if (-not $nsis) { throw "NSIS installer was not produced" }
+          if (-not $msi) { throw "MSI installer was not produced" }
+
+          Copy-Item $nsis.FullName -Destination (Join-Path $assetDir "meetily_${env:VERSION}_x64-setup.exe") -Force
+          Copy-Item $msi.FullName -Destination (Join-Path $assetDir "meetily_${env:VERSION}_x64_en-US.msi") -Force
+
+          $updaterFiles = Get-ChildItem "meetily/target/release/bundle" -File -Recurse |
+            Where-Object {
+              $_.Name -eq "latest.json" -or
+              $_.Name.EndsWith(".sig", [StringComparison]::OrdinalIgnoreCase) -or
+              $_.Name.EndsWith(".zip", [StringComparison]::OrdinalIgnoreCase) -or
+              $_.Name.EndsWith(".tar.gz", [StringComparison]::OrdinalIgnoreCase) -or
+              $_.Name.EndsWith(".nsis.zip", [StringComparison]::OrdinalIgnoreCase)
+            }
+
+          if (-not $updaterFiles -or $updaterFiles.Count -eq 0) {
+            throw "Signed updater artifacts were not produced"
+          }
+
+          foreach ($file in $updaterFiles) {
+            Copy-Item $file.FullName -Destination (Join-Path $assetDir $file.Name) -Force
+          }
+
+          Get-ChildItem $assetDir
+
+      - name: Verify signed release artifacts and generate checksums
+        working-directory: ${{ env.FRONTEND_DIR }}
         shell: pwsh
         run: |
-          Get-ChildItem "meetily/target/release/bundle/nsis" -ErrorAction Stop
-          Get-ChildItem "meetily/target/release/bundle/msi" -ErrorAction Stop
+          .\scripts\verify-release-artifacts.ps1 `
+            -NsisDir "..\target\release\bundle\nsis" `
+            -MsiDir "..\target\release\bundle\msi" `
+            -UpdaterDir "..\target\release\bundle" `
+            -RuntimeDir "src-tauri\resources\runtime\windows-x64" `
+            -ModelDir "src-tauri\resources\models\faster-whisper-base" `
+            -SidecarDir "src-tauri\binaries" `
+            -OutputDir "..\release-assets" `
+            -RequireAuthenticode
 
-      - name: Upload installer to Release
+      - name: Generate release notes
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          node meetily/scripts/generate-release-notes.js $env:VERSION $env:GITHUB_SHA "${env:RELEASE_ASSET_DIR}" "${env:RELEASE_ASSET_DIR}\RELEASE_NOTES.md"
+
+      - name: Upload signed release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-assets
+          if-no-files-found: error
+          path: meetily/release-assets/**
+
+  smoke-install-launch:
+    name: Smoke install and launch
+    needs:
+      - validate
+      - build-signed-installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download signed release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release-assets
+          path: ${{ env.RELEASE_ASSET_DIR }}
+
+      - name: Smoke install and launch NSIS installer
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          $installer = Join-Path "${env:RELEASE_ASSET_DIR}" "meetily_${env:VERSION}_x64-setup.exe"
+          & "meetily/frontend/scripts/smoke-install-launch.ps1" `
+            -InstallerPath $installer `
+            -InstallDir "$env:TEMP\meetily-smoke-install" `
+            -LogDir "${env:RELEASE_SMOKE_LOG_DIR}" `
+            -LaunchSeconds 20
+
+      - name: Upload smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-smoke-install-launch-logs
+          if-no-files-found: warn
+          path: meetily/smoke-logs/**
+
+  publish-release:
+    name: Publish GitHub Release
+    needs:
+      - validate
+      - smoke-install-launch
+    runs-on: windows-latest
+    steps:
+      - name: Download signed release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release-assets
+          path: ${{ env.RELEASE_ASSET_DIR }}
+
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.validate.outputs.tag }}
+          name: Meetily ${{ needs.validate.outputs.version }}
+          body_path: meetily/release-assets/RELEASE_NOTES.md
           files: |
-            meetily/target/release/bundle/nsis/*.exe
-            meetily/target/release/bundle/msi/*.msi
+            meetily/release-assets/meetily_${{ needs.validate.outputs.version }}_x64-setup.exe
+            meetily/release-assets/meetily_${{ needs.validate.outputs.version }}_x64_en-US.msi
+            meetily/release-assets/latest.json
+            meetily/release-assets/SHA256SUMS.txt
+            meetily/release-assets/*.sig
+            meetily/release-assets/*.zip
+            meetily/release-assets/*.tar.gz

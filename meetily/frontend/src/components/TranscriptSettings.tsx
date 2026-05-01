@@ -4,6 +4,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { Label } from './ui/label';
+import { Switch } from './ui/switch';
 import { Eye, EyeOff, Lock, Unlock, CheckCircle2, XCircle, Loader2, RefreshCw } from 'lucide-react';
 import { ModelManager } from './WhisperModelManager';
 import { ParakeetModelManager } from './ParakeetModelManager';
@@ -40,6 +41,14 @@ type FasterWhisperServerConfig = {
     model: string;
     language: string | null;
     computeType: string;
+    performanceProfile: 'auto' | 'fast' | 'balanced' | 'accurate';
+    batteryThrottleEnabled: boolean;
+    effectiveProfile?: 'fast' | 'balanced' | 'accurate';
+    effectiveModel?: string;
+    chunkDurationMs?: number;
+    beamSize?: number;
+    maxConcurrentJobs?: number;
+    modelFallback?: boolean;
 };
 
 type FasterWhisperServerHealth = {
@@ -75,6 +84,13 @@ const FWS_LANGUAGE_OPTIONS: { value: string; label: string }[] = [
     { value: 'hi', label: 'Hindi' },
 ];
 
+const FWS_PROFILE_OPTIONS: { value: FasterWhisperServerConfig['performanceProfile']; label: string; description: string }[] = [
+    { value: 'auto', label: 'Auto', description: 'Choose a safe default from detected hardware' },
+    { value: 'fast', label: 'Fast', description: 'Lowest CPU load and shortest chunks' },
+    { value: 'balanced', label: 'Balanced', description: 'Default CPU mode for most work laptops' },
+    { value: 'accurate', label: 'Accurate', description: 'Higher beam size; uses small model only when available' },
+];
+
 export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelConfig, onModelSelect }: TranscriptSettingsProps) {
     const [apiKey, setApiKey] = useState<string | null>(transcriptModelConfig.apiKey || null);
     const [showApiKey, setShowApiKey] = useState<boolean>(false);
@@ -89,6 +105,8 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
         model: 'Systran/faster-whisper-base',
         language: null,
         computeType: 'int8',
+        performanceProfile: 'auto',
+        batteryThrottleEnabled: false,
     });
     const [fwsHealth, setFwsHealth] = useState<FasterWhisperServerHealth | null>(null);
     const [fwsHealthLoading, setFwsHealthLoading] = useState<boolean>(false);
@@ -114,6 +132,22 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                 if (!res.ok) return;
                 const data: FasterWhisperServerConfig = await res.json();
                 setFwsConfig(data);
+                try {
+                    const status = await invoke<any>('get_cpu_optimization_status');
+                    setFwsConfig((current) => ({
+                        ...current,
+                        performanceProfile: status.selectedProfile || current.performanceProfile,
+                        batteryThrottleEnabled: Boolean(status.resolved?.batteryThrottleEnabled),
+                        effectiveProfile: status.resolved?.effectiveProfile || current.effectiveProfile,
+                        effectiveModel: status.resolved?.effectiveModel || current.effectiveModel,
+                        chunkDurationMs: status.resolved?.chunkDurationMs || current.chunkDurationMs,
+                        beamSize: status.resolved?.beamSize || current.beamSize,
+                        maxConcurrentJobs: status.resolved?.maxConcurrentJobs || current.maxConcurrentJobs,
+                        modelFallback: Boolean(status.resolved?.modelFallback),
+                    }));
+                } catch (err) {
+                    console.warn('Could not load CPU optimization status:', err);
+                }
             } catch (err) {
                 console.warn('Could not load transcription config from backend:', err);
             }
@@ -214,6 +248,22 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
             });
             if (!res.ok) throw new Error(`Save failed (${res.status})`);
             const data: FasterWhisperServerConfig = await res.json();
+            try {
+                const status = await invoke<any>('set_cpu_optimization_profile', {
+                    profile: fwsConfig.performanceProfile,
+                    batteryThrottleEnabled: fwsConfig.batteryThrottleEnabled,
+                });
+                data.performanceProfile = status.selectedProfile || data.performanceProfile;
+                data.batteryThrottleEnabled = Boolean(status.resolved?.batteryThrottleEnabled);
+                data.effectiveProfile = status.resolved?.effectiveProfile || data.effectiveProfile;
+                data.effectiveModel = status.resolved?.effectiveModel || data.effectiveModel;
+                data.chunkDurationMs = status.resolved?.chunkDurationMs || data.chunkDurationMs;
+                data.beamSize = status.resolved?.beamSize || data.beamSize;
+                data.maxConcurrentJobs = status.resolved?.maxConcurrentJobs || data.maxConcurrentJobs;
+                data.modelFallback = Boolean(status.resolved?.modelFallback);
+            } catch (err) {
+                console.warn('Could not save CPU optimization profile:', err);
+            }
             setFwsConfig(data);
             setFwsSaveMessage('Settings saved.');
             // Mirror into the in-memory transcript model config so the rest of
@@ -390,6 +440,74 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
 
                             <div className="text-xs text-gray-500">
                                 Compute type: <code>{fwsConfig.computeType}</code> (CPU build).
+                            </div>
+
+                            <div className="space-y-3 rounded-md border border-gray-200 bg-white p-4">
+                                <div>
+                                    <Label className="block text-sm font-medium text-gray-700">
+                                        CPU performance profile
+                                    </Label>
+                                    <Select
+                                        value={fwsConfig.performanceProfile}
+                                        onValueChange={(value) =>
+                                            setFwsConfig({
+                                                ...fwsConfig,
+                                                performanceProfile: value as FasterWhisperServerConfig['performanceProfile'],
+                                            })
+                                        }
+                                    >
+                                        <SelectTrigger className="mt-2 focus:ring-1 focus:ring-blue-500 focus:border-blue-500">
+                                            <SelectValue placeholder="Select a profile" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {FWS_PROFILE_OPTIONS.map((profile) => (
+                                                <SelectItem key={profile.value} value={profile.value}>
+                                                    {profile.label} - {profile.description}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <Label className="text-sm font-medium text-gray-700">
+                                            Throttle on battery saver
+                                        </Label>
+                                        <p className="mt-1 text-xs text-gray-500">
+                                            Uses Fast as the effective profile when battery saver is detected.
+                                        </p>
+                                    </div>
+                                    <Switch
+                                        checked={fwsConfig.batteryThrottleEnabled}
+                                        onCheckedChange={(checked) =>
+                                            setFwsConfig({ ...fwsConfig, batteryThrottleEnabled: checked })
+                                        }
+                                    />
+                                </div>
+
+                                <div className="grid gap-1 text-xs text-gray-600 sm:grid-cols-2">
+                                    {fwsConfig.effectiveProfile && (
+                                        <div>Effective profile: <code>{fwsConfig.effectiveProfile}</code></div>
+                                    )}
+                                    {fwsConfig.effectiveModel && (
+                                        <div>Effective model: <code>{fwsConfig.effectiveModel}</code></div>
+                                    )}
+                                    {typeof fwsConfig.beamSize === 'number' && (
+                                        <div>Beam size: <code>{fwsConfig.beamSize}</code></div>
+                                    )}
+                                    {typeof fwsConfig.chunkDurationMs === 'number' && (
+                                        <div>Chunk duration: <code>{Math.round(fwsConfig.chunkDurationMs / 1000)}s</code></div>
+                                    )}
+                                    {typeof fwsConfig.maxConcurrentJobs === 'number' && (
+                                        <div>Concurrent jobs: <code>{fwsConfig.maxConcurrentJobs}</code></div>
+                                    )}
+                                </div>
+                                {fwsConfig.modelFallback && (
+                                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                        Accurate is using the bundled base model because the small model is not available.
+                                    </div>
+                                )}
                             </div>
 
                             <div className="flex items-center gap-3">

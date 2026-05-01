@@ -636,6 +636,12 @@ pub fn run() {
             process_manager::commands::restart_helper_service,
             process_manager::commands::start_helper_service,
             process_manager::commands::stop_helper_service,
+            process_manager::commands::get_startup_diagnostics,
+            process_manager::commands::run_startup_repair,
+            process_manager::commands::rerun_startup_checks,
+            process_manager::commands::get_cpu_optimization_status,
+            process_manager::commands::set_cpu_optimization_profile,
+            process_manager::commands::detect_default_cpu_profile,
             // Custom OpenAI commands
             api::api_save_custom_openai_config,
             api::api_get_custom_openai_config,
