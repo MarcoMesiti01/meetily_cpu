@@ -67,6 +67,20 @@ Write-Step "Installing backend and faster-whisper-server dependencies"
     --no-warn-script-location `
     -r $RequirementsFile
 
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to install bundled runtime Python dependencies"
+}
+
+Write-Step "Adding faster-whisper-server wheel metadata shim"
+$SitePackagesDir = Join-Path $PythonDir "Lib\site-packages"
+$FasterWhisperServerPyproject = Join-Path $SitePackagesDir "pyproject.toml"
+if (-not (Test-Path -LiteralPath $FasterWhisperServerPyproject -PathType Leaf)) {
+    @(
+        "[project]"
+        "version = `"$FasterWhisperServerVersion`""
+    ) | Set-Content -LiteralPath $FasterWhisperServerPyproject -Encoding ASCII
+}
+
 Write-Step "Copying backend application source"
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $BackendTarget) | Out-Null
 Copy-Item -Path (Join-Path $RepoRoot "backend\app") -Destination (Split-Path -Parent $BackendTarget) -Recurse -Force
@@ -81,5 +95,9 @@ if (-not $SkipModelDownload) {
 
 Write-Step "Validating staged Python imports"
 & (Join-Path $PythonDir "python.exe") -c "import fastapi, uvicorn, faster_whisper, faster_whisper_server; import sys; print(sys.version)"
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Bundled runtime import validation failed"
+}
 
 Write-Step "Runtime staged at $RuntimeRoot"
