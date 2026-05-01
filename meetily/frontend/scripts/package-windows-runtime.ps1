@@ -45,7 +45,7 @@ $PthContent = Get-Content $PthFile.FullName
 $PthContent = $PthContent | ForEach-Object {
     if ($_ -eq "#import site") { "import site" } else { $_ }
 }
-$PthContent = @($PthContent) + @("Lib", "Lib\site-packages")
+$PthContent = @($PthContent) + @("Lib", "Lib\site-packages", "..\backend\app")
 Set-Content -Path $PthFile.FullName -Value $PthContent -Encoding ASCII
 New-Item -ItemType Directory -Force -Path (Join-Path $PythonDir "Lib\site-packages") | Out-Null
 

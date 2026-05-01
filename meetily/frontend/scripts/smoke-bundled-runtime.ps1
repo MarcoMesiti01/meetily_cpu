@@ -30,10 +30,15 @@ if ($RequireModel) {
     Assert-Path $ModelDir "Bundled faster-whisper base model"
 }
 
-& $PythonExe -c "import fastapi, uvicorn, faster_whisper, faster_whisper_server; import main; print('runtime imports ok')" `
-    2>&1 | Write-Host
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$importOutput = & $PythonExe -c "import fastapi, uvicorn, faster_whisper, faster_whisper_server; import main; print('runtime imports ok')" 2>&1
+$importExitCode = $LASTEXITCODE
+$ErrorActionPreference = $previousErrorActionPreference
 
-if ($LASTEXITCODE -ne 0) {
+$importOutput | ForEach-Object { Write-Host $_ }
+
+if ($importExitCode -ne 0) {
     throw "Bundled runtime import smoke check failed"
 }
 
