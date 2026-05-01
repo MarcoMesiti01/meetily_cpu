@@ -580,6 +580,14 @@ jobs:
           path: frontend/src-tauri/binaries/ffmpeg-*
           key: ${{ runner.os }}-ffmpeg-${{ hashFiles('frontend/src-tauri/build.rs', 'frontend/src-tauri/build/ffmpeg.rs') }}    
 
+      - name: Package bundled Windows Python runtime
+        if: contains(inputs.platform, 'windows')
+        working-directory: frontend
+        shell: pwsh
+        run: |
+          .\scripts\package-windows-runtime.ps1
+          .\scripts\smoke-bundled-runtime.ps1 -RequireModel
+
       - name: Build with Tauri
         id: tauri-build
         uses: tauri-apps/tauri-action@v0

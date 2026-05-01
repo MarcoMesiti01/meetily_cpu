@@ -20,6 +20,9 @@ models/
 whisper.cpp/
 whisper-server*
 whisper-server-package/
+/src-tauri/resources/runtime/
+/src-tauri/resources/models/faster-whisper-base/
+/.runtime-cache/
 
 # testing
 /coverage

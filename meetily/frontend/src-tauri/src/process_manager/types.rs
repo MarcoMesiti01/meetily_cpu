@@ -48,6 +48,8 @@ pub struct ServiceRuntimeState {
     pub port: u16,
     pub restart_count: u8,
     pub started_by_meetily: bool,
+    pub runtime_source: Option<String>,
+    pub resolved_path: Option<String>,
     pub last_error: Option<String>,
     pub last_ready_at: Option<String>,
 }
@@ -61,6 +63,8 @@ impl ServiceRuntimeState {
             port,
             restart_count: 0,
             started_by_meetily: false,
+            runtime_source: None,
+            resolved_path: None,
             last_error: None,
             last_ready_at: None,
         }

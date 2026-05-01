@@ -88,6 +88,13 @@ jobs:
             throw "Missing llama-helper sidecar binary"
           }
 
+      - name: Package bundled Windows Python runtime
+        working-directory: meetily/frontend
+        shell: pwsh
+        run: |
+          .\scripts\package-windows-runtime.ps1
+          .\scripts\smoke-bundled-runtime.ps1 -RequireModel
+
       - name: Verify native Windows toolchain
         shell: pwsh
         run: |

@@ -95,7 +95,9 @@
             "icons/app_icon.ico"
         ],
         "resources": [
-            "templates/*.json"
+            "templates/*.json",
+            "resources/runtime/windows-x64/**",
+            "resources/models/faster-whisper-base/**"
         ],
         "externalBin": [
             "binaries/llama-helper",

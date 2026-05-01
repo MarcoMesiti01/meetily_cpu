@@ -25,6 +25,8 @@
         "tauri:build:coreml": "tauri build -- --features coreml",
         "tauri:build:openblas": "tauri build -- --features openblas",
         "tauri:build:hipblas": "tauri build -- --features hipblas",
+        "runtime:windows": "powershell -ExecutionPolicy Bypass -File scripts/package-windows-runtime.ps1",
+        "runtime:windows:smoke": "powershell -ExecutionPolicy Bypass -File scripts/smoke-bundled-runtime.ps1 -RequireModel",
         "lint": "next lint"
     },
     "dependencies": {

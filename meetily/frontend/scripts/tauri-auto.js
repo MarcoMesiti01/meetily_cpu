@@ -129,6 +129,28 @@ function ensureLlamaSidecarForDev() {
 
 ensureLlamaSidecarForDev();
 
+function ensureWindowsRuntimeForBuild() {
+  if (command !== 'build' || platform !== 'win32') return;
+  if (env.MEETILY_SKIP_RUNTIME_PACKAGE === '1') {
+    console.log('Skipping bundled runtime packaging because MEETILY_SKIP_RUNTIME_PACKAGE=1');
+    return;
+  }
+
+  console.log('Preparing bundled Windows Python runtime...');
+  execSync('powershell -ExecutionPolicy Bypass -File scripts/package-windows-runtime.ps1', {
+    stdio: 'inherit',
+    cwd: process.cwd(),
+    env,
+  });
+  execSync('powershell -ExecutionPolicy Bypass -File scripts/smoke-bundled-runtime.ps1 -RequireModel', {
+    stdio: 'inherit',
+    cwd: process.cwd(),
+    env,
+  });
+}
+
+ensureWindowsRuntimeForBuild();
+
 if (platform === 'linux' && feature === 'cuda') {
   console.log('🐧 Linux/CUDA detected: Setting CMAKE flags for NVIDIA GPU');
   env.CMAKE_CUDA_ARCHITECTURES = '75';
