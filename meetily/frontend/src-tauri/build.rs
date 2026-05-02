@@ -18,7 +18,15 @@ fn main() {
     // Download and bundle FFmpeg binary at build-time
     ffmpeg::ensure_ffmpeg_binary();
 
-    tauri_build::build()
+    let tauri_build_thread = std::thread::Builder::new()
+        .name("tauri-build".to_string())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(tauri_build::build)
+        .expect("failed to spawn Tauri build thread");
+
+    if let Err(payload) = tauri_build_thread.join() {
+        std::panic::resume_unwind(payload);
+    }
 }
 
 /// Detects GPU acceleration capabilities and provides build guidance

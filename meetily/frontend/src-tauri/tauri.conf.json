@@ -96,8 +96,8 @@
         ],
         "resources": [
             "templates/*.json",
-            "resources/runtime/windows-x64/**",
-            "resources/models/faster-whisper-base/**"
+            "resources/runtime/windows-x64/**/*",
+            "resources/models/faster-whisper-base/**/*"
         ],
         "externalBin": [
             "binaries/llama-helper",

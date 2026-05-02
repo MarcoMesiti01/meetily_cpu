@@ -129,10 +129,7 @@ pub async fn collect_startup_diagnostics<R: Runtime>(
     let app_data_dir_display = app_data_dir.as_ref().map(|path| path.display().to_string());
     let cpu_optimization = app_data_dir
         .as_ref()
-        .map(|path| resolve_cpu_profile_for_diagnostics(app, path))
-        .transpose()
-        .ok()
-        .flatten();
+        .and_then(|path| resolve_cpu_profile_for_diagnostics(app, path).ok().flatten());
 
     Ok(StartupDiagnostics {
         overall,
