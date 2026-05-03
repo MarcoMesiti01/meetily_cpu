@@ -48,13 +48,18 @@ try {
         /v `
         $FilePath
 
-    if ($LASTEXITCODE -ne 0) {
-        Fail "signtool failed for $FilePath"
-    }
+    $signToolExitCode = $LASTEXITCODE
 
     $signature = Get-AuthenticodeSignature -LiteralPath $FilePath
     if ($signature.Status -eq "NotSigned" -or -not $signature.SignerCertificate) {
+        if ($signToolExitCode -ne 0) {
+            Fail "signtool failed for $FilePath and no Authenticode signature was applied"
+        }
         Fail "Authenticode signature was not applied for $FilePath. Status: $($signature.Status)"
+    }
+
+    if ($signToolExitCode -ne 0) {
+        Write-Warning "[meetily signing] signtool returned exit code $signToolExitCode, but an Authenticode signature is present."
     }
 
     if ($signature.Status -ne "Valid") {
