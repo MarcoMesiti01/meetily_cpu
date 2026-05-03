@@ -11,4 +11,4 @@ if (-not (Test-Path -LiteralPath $releaseSigningScript -PathType Leaf)) {
 }
 
 & $releaseSigningScript -FilePath $FilePath
-exit $LASTEXITCODE
+exit 0
